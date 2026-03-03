@@ -1,0 +1,417 @@
+#!/bin/bash
+
+#================================================
+# Script de Instalación de Snort3
+# Sistema de Detección de Intrusos (IDS)
+# Hacking Ético - Práctica de Seguridad
+#================================================
+
+# Colores para output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Función para mostrar títulos
+print_header() {
+    echo -e "\n${GREEN}===== $1 =====${NC}\n"
+}
+
+# Función para mostrar errores
+print_error() {
+    echo -e "${RED}[ERROR] $1${NC}"
+}
+
+# Función para mostrar advertencias
+print_warning() {
+    echo -e "${YELLOW}[ADVERTENCIA] $1${NC}"
+}
+
+# Función para mostrar éxito
+print_success() {
+    echo -e "${GREEN}[✓] $1${NC}"
+}
+
+#================================================
+# 1. ACTUALIZAR SISTEMA Y LIMPIAR INSTALACIONES PREVIAS
+#================================================
+print_header "Paso 1: Actualizar Sistema"
+
+apt-get update
+apt-get upgrade -y
+
+# Eliminar instalaciones previas si existen
+print_warning "Eliminando instalaciones previas de Snort..."
+apt-get remove -y snort snort3 2>/dev/null
+rm -rf /usr/local/snort /etc/snort /var/log/snort 2>/dev/null
+
+print_success "Sistema actualizado"
+
+#================================================
+# 2. INSTALAR DEPENDENCIAS FUNDAMENTALES
+#================================================
+print_header "Paso 2: Instalar Dependencias"
+
+DEPENDENCIAS="
+build-essential
+git
+wget
+curl
+cmake
+pkg-config
+libpcap-dev
+libssl-dev
+libluajit-2.1-dev
+libdaq-dev
+libdumbnet-dev
+zlib1g-dev
+libpcre3-dev
+libhwloc-dev
+libsafec-dev
+autotools-dev
+libtool
+flex
+bison
+"
+
+echo "Instalando dependencias necesarias..."
+for dep in $DEPENDENCIAS; do
+    apt-get install -y $dep > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        print_success "Instalado: $dep"
+    else
+        print_warning "Problema al instalar: $dep"
+    fi
+done
+
+#================================================
+# 3. DESCARGAR Y COMPILAR SNORT3
+#================================================
+print_header "Paso 3: Descargar y Compilar Snort3"
+
+# Crear directorio de trabajo
+mkdir -p /tmp/snort_build
+cd /tmp/snort_build
+
+# Descargar Snort3 (versión 3.1.75.0)
+print_warning "Descargando Snort3..."
+wget -q https://github.com/snort3/snort3/archive/refs/tags/3.1.75.0.tar.gz -O snort3.tar.gz
+
+if [ ! -f snort3.tar.gz ]; then
+    print_error "No se pudo descargar Snort3. Verifica tu conexión a internet."
+    exit 1
+fi
+
+tar -xzf snort3.tar.gz
+cd snort3-3.1.75.0
+
+print_success "Snort3 descargado"
+
+# Compilar Snort3
+print_warning "Compilando Snort3 (esto puede tardar varios minutos)..."
+mkdir -p build
+cd build
+
+cmake -DCMAKE_INSTALL_PREFIX=/usr/local/snort \
+       -DENABLE_CPPCHECK=OFF \
+       -DENABLE_INSTALL_DOC=OFF \
+       ..
+
+if [ $? -ne 0 ]; then
+    print_error "Error en cmake. Verifica las dependencias."
+    exit 1
+fi
+
+make -j$(nproc)
+
+if [ $? -ne 0 ]; then
+    print_error "Error en compilación. Verifica el log."
+    exit 1
+fi
+
+make install
+
+print_success "Snort3 compilado e instalado"
+
+#================================================
+# 4. CREAR ESTRUCTURA DE DIRECTORIOS
+#================================================
+print_header "Paso 4: Crear Estructura de Directorios"
+
+mkdir -p /usr/local/snort/etc/snort
+mkdir -p /usr/local/snort/etc/snort/rules
+mkdir -p /var/log/snort
+mkdir -p /etc/snort
+mkdir -p /etc/snort/rules
+
+print_success "Directorios creados"
+
+#================================================
+# 5. CREAR ARCHIVO DE CONFIGURACIÓN snort.lua
+#================================================
+print_header "Paso 5: Crear Configuración snort.lua"
+
+cat > /usr/local/snort/etc/snort/snort.lua << 'EOF'
+-- Configuración de Snort3 para IDS
+-- Red de Prueba netinvm
+
+-- ===== VARIABLES DE RED =====
+HOME_NET = '10.5.1.0/24'
+EXTERNAL_NET = 'any'
+
+ips =
+{
+    variables =
+    {
+        nets =
+        {
+            -- Red local interna
+            RED_LOCAL = '10.5.2.0/24',
+            -- Red DMZ
+            RED_DMZ = '10.5.1.0/24',
+            -- Servidor web ubicado en la DMZ
+            SERV_WEB = '10.5.1.10',
+            -- Red externa (todo lo que no sea RED_LOCAL ni RED_DMZ)
+            RED_EXTERNA = 'any'
+        },
+        ports =
+        {
+            HTTP_PORTS = '80',
+            HTTPS_PORTS = '443',
+            SHELLCODE_PORTS = '180'
+        }
+    }
+}
+
+-- ===== RUTA DE REGLAS =====
+RULE_PATH = '/usr/local/snort/etc/snort/rules'
+
+-- ===== CONFIGURACIÓN DAQ =====
+daq =
+{
+    module_dirs =
+    {
+        '/usr/local/lib/daq'
+    },
+    modules =
+    {
+        {
+            name = 'afpacket',
+            mode = 'passive',
+            variables =
+            {
+                'fanout_type=hash',
+                'fanout_flag=defrag'
+            }
+        }
+    }
+}
+
+-- ===== CONFIGURACIÓN DE MÓDULOS =====
+stream = { }
+normalization = { }
+detection = { }
+alerts = { }
+
+EOF
+
+print_success "Archivo snort.lua creado"
+
+#================================================
+# 6. CREAR ARCHIVO DE REGLAS PERSONALIZADAS
+#================================================
+print_header "Paso 6: Crear Reglas de Detección"
+
+cat > /usr/local/snort/etc/snort/rules/local.rules << 'EOF'
+# ======================================================
+# REGLAS PERSONALIZADAS PARA IDS
+# Sistema de Detección de Intrusos - Hacking Ético
+# ======================================================
+
+# ===== REGLA 1: DETECTAR PING (ICMP Echo Request) =====
+alert icmp $RED_EXTERNA any -> $SERV_WEB any \
+    (msg:"Detectado reconocimiento ICMP (ping) hacia servidor WEB"; \
+    itype:8; \
+    sid:1000001; \
+    rev:1; \
+    classtype:icmp-event;)
+
+# ===== REGLA 2: DETECTAR PING DESDE RED INTERNA =====
+alert icmp $RED_LOCAL any -> $SERV_WEB any \
+    (msg:"Ping desde red interna hacia servidor WEB en DMZ"; \
+    itype:8; \
+    sid:1000011; \
+    rev:1; \
+    classtype:icmp-event;)
+
+# ===== REGLA 3: DETECTAR RECONOCIMIENTO ICMP =====
+alert icmp $RED_EXTERNA any -> $SERV_WEB any \
+    (msg:"Detectado reconocimiento ICMP (ping) al servidor WEB desde Internet"; \
+    itype:8; \
+    sid:1000001; \
+    rev:1; \
+    classtype:icmp-event;)
+
+# ===== REGLA 4: DETECTAR CONEXIÓN TCP AL PUERTO 80 =====
+alert tcp $RED_EXTERNA any -> $SERV_WEB 80 \
+    (msg:"Conexión TCP al puerto 80 servidor WEB"; \
+    flags:S; \
+    sid:1000007; \
+    rev:2; \
+    classtype:web-application-activity;)
+
+# ===== REGLA 5: DETECTAR SOLICITUD HTTP GET =====
+alert tcp any any -> $SERV_WEB 80 \
+    (msg:"Petición HTTP GET detectada hacia servidor WEB"; \
+    content:"GET"; \
+    sid:1000006; \
+    rev:2; \
+    classtype:web-application-activity;)
+
+# ===== REGLA 6: DETECTAR INTENTO DE ACCESO A /admin =====
+alert tcp $RED_EXTERNA any -> $SERV_WEB 80 \
+    (msg:"Detectado intento de acceso a recursos administrativos en Apache - /admin"; \
+    content:"/admin"; \
+    sid:1000002; \
+    rev:1; \
+    classtype:web-application-attack;)
+
+# ===== REGLA 7: DETECTAR INTENTO DE ACCESO A /login =====
+alert tcp $RED_EXTERNA any -> $SERV_WEB 80 \
+    (msg:"Detectado intento de acceso a recursos administrativos en Apache - /login"; \
+    content:"/login"; \
+    sid:1000003; \
+    rev:1; \
+    classtype:web-application-attack;)
+
+# ===== REGLA 8: DETECTAR INTENTO DE ACCESO A /phpmyadmin =====
+alert tcp $RED_EXTERNA any -> $SERV_WEB 80 \
+    (msg:"Detectado intento de acceso a recursos administrativos en Apache - /phpmyadmin"; \
+    content:"/phpmyadmin"; \
+    sid:1000004; \
+    rev:1; \
+    classtype:web-application-attack;)
+
+# ===== REGLA 9: DETECTAR INTENTO DE ACCESO A .htaccess =====
+alert tcp $RED_EXTERNA any -> $SERV_WEB 80 \
+    (msg:"Detectado intento de acceso a recursos administrativos en Apache - /.htaccess"; \
+    content:"/.htaccess"; \
+    sid:1000005; \
+    rev:1; \
+    classtype:web-application-attack;)
+
+# ===== REGLA 10: DETECTAR PETICIÓN HTTP POST =====
+alert tcp any any -> $SERV_WEB 80 \
+    (msg:"Petición HTTP POST detectada hacia servidor WEB"; \
+    content:"POST"; \
+    sid:1000008; \
+    rev:1; \
+    classtype:web-application-activity;)
+
+EOF
+
+print_success "Archivo de reglas local.rules creado"
+
+#================================================
+# 7. ASIGNAR PERMISOS
+#================================================
+print_header "Paso 7: Asignar Permisos"
+
+# Crear usuario snort si no existe
+id snort > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    useradd -r -s /sbin/nologin snort
+    print_success "Usuario 'snort' creado"
+fi
+
+# Asignar permisos
+chown -R snort:snort /usr/local/snort/etc/snort
+chown -R snort:snort /var/log/snort
+chmod -R 755 /usr/local/snort
+chmod -R 775 /var/log/snort
+chmod -R 644 /usr/local/snort/etc/snort/rules/local.rules
+
+print_success "Permisos asignados correctamente"
+
+#================================================
+# 8. CREAR SYMLINK
+#================================================
+print_header "Paso 8: Crear Symlink"
+
+ln -sf /usr/local/snort/bin/snort /usr/local/bin/snort
+
+print_success "Symlink creado"
+
+#================================================
+# 9. VERIFICAR INSTALACIÓN
+#================================================
+print_header "Paso 9: Verificar Instalación"
+
+# Verificar versión
+snort -V
+
+if [ $? -eq 0 ]; then
+    print_success "Snort3 instalado correctamente"
+else
+    print_error "Error al verificar Snort3"
+    exit 1
+fi
+
+#================================================
+# 10. VALIDAR CONFIGURACIÓN
+#================================================
+print_header "Paso 10: Validar Configuración"
+
+snort -c /usr/local/snort/etc/snort/snort.lua -T
+
+if [ $? -eq 0 ]; then
+    print_success "Configuración validada sin errores"
+else
+    print_error "Error en la validación de configuración"
+    exit 1
+fi
+
+#================================================
+# 11. CREAR ARCHIVOS DE PRUEBA EN DMZ
+#================================================
+print_header "Paso 11: Crear Archivos de Prueba (si estás en la DMZ)"
+
+if [ -d /var/www/html ]; then
+    mkdir -p /var/www/html/admin
+    mkdir -p /var/www/html/login
+    mkdir -p /var/www/html/phpmyadmin
+    
+    echo "Admin Panel" > /var/www/html/admin/index.html
+    echo "Login Page" > /var/www/html/login/index.html
+    echo "phpMyAdmin" > /var/www/html/phpmyadmin/index.html
+    
+    chmod -R 755 /var/www/html/admin
+    chmod -R 755 /var/www/html/login
+    chmod -R 755 /var/www/html/phpmyadmin
+    
+    print_success "Archivos de prueba creados en /var/www/html"
+else
+    print_warning "No se encontró /var/www/html. Los archivos de prueba deben crearse manualmente."
+fi
+
+#================================================
+# RESUMEN FINAL
+#================================================
+print_header "INSTALACIÓN COMPLETADA"
+
+echo "Snort3 ha sido instalado correctamente."
+echo ""
+echo "Ubicaciones importantes:"
+echo "  - Ejecutable: /usr/local/snort/bin/snort"
+echo "  - Configuración: /usr/local/snort/etc/snort/snort.lua"
+echo "  - Reglas: /usr/local/snort/etc/snort/rules/local.rules"
+echo "  - Logs: /var/log/snort/"
+echo ""
+echo "Para ejecutar Snort3:"
+echo "  snort -c /usr/local/snort/etc/snort/snort.lua -i eth-dmz -A alert_fast -l /var/log/snort -k none -q"
+echo ""
+echo "Para capturar tráfico con tcpdump:"
+echo "  tcpdump -i eth-dmz"
+echo ""
+
+print_success "¡Listo para usar!"
